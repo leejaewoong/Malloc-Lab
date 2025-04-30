@@ -296,36 +296,3 @@ void *mm_realloc(void *p, size_t size)
 
 
 
-
-
-
-
-
-
-
-
-// void *mm_realloc(void *ptr, size_t size)
-// {
-//     void *oldptr = ptr;
-//     void *newptr;
-//     size_t copySize;
-
-//     // 입력받은 사이즈로 malloc를 수행한 다음 newptr을 반환
-//     newptr = mm_malloc(size);
-
-//     // 힙을 더 이상 확장할 수 없으면 NULL 반환
-//     if (newptr == NULL)
-//         return NULL;
-
-//     // 이전에 사용 중인 블록의 헤더에 기록된 사이즈 + 할당 여부를 copySize에 저장
-//     copySize = *(size_t *)((char *)oldptr - WSIZE);
-
-//     // 이전에 사용한 블록이 더 큰 사이즈였다면 사이즈 조정
-//     if (size < copySize)
-//         copySize = size;
-
-//     memcpy(newptr, oldptr, copySize); // 이전 블록에서 copySize만큼을 새로운 블록에 복사
-//     mm_free(oldptr); // 이전의 블록은 해제
-//     return newptr;
-// }
-
