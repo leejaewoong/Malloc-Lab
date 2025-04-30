@@ -47,6 +47,8 @@ team_t team = {
 #define PUT(p, val) ((*(unsigned int *)(p)) = (val))
 #define PACK(size, alloc) (size | alloc) // size는 malloc 함수로부터 입력 받은 파라미터
 
+#define MAX(a, b) (a > b ? a : b)
+
 #define GET(p) (*(unsigned int *)(p))
 #define GETSIZE(p) ((GET(p)) & (~0x7))
 #define GETALLOC(p) ((GET(p)) & (0x1))
@@ -57,6 +59,7 @@ team_t team = {
 #define NEXT_BLKP(bp) (((char *)bp) + (GETSIZE(HDRP(bp))))
 #define PREV_BLKP(bp) (((char *)bp) - (GETSIZE(((char *)bp) - DSIZE))) 
 
+void *coalesce(void *ptr);
 static void* heapListP;
 
 
@@ -130,16 +133,16 @@ void *place(char *bp, size_t newSize)
         PUT(FTRP(bp), PACK(GETSIZE(HDRP(bp)), 1));
     }
 
-    return;
+    return bp;
 }
 
 
-void *mm_extend(size_t newSize)
+void *mm_extend(size_t extendSize, size_t newSize)
 {
     // 힙 확장 실패 시 에러 출력 및 NULL 반환
     void *bp;
 
-    if ((void *)(bp = mem_sbrk(newSize)) == (void *)-1) // 에필로그 헤더를 위해 DSIZE만큼의 추가분 확보
+    if ((void *)(bp = mem_sbrk(extendSize)) == (void *)-1) // 에필로그 헤더를 위해 DSIZE만큼의 추가분 확보
     {
         printf("더 이상 힙을 확장할 수 없습니다\n");            
         return NULL;
@@ -148,9 +151,11 @@ void *mm_extend(size_t newSize)
     // 힙 확장 성공 시 
     else 
     {
-        PUT((char *)bp - WSIZE, PACK(newSize, 1)); // 새로운 블럭의 헤더에 정보 삽입 (지난 에필로그 블록 덮어쓰기)
-        PUT(((char *)bp + newSize - DSIZE), PACK(newSize, 1)); // 새로운 블럭의 푸터에 정보 삽입
+        PUT((char *)bp - WSIZE, PACK(extendSize, 0)); // 새로운 블럭의 헤더에 정보 삽입 (지난 에필로그 블록 덮어쓰기)
+        PUT(((char *)bp + extendSize - DSIZE), PACK(extendSize, 0)); // 새로운 블럭의 푸터에 정보 삽입
         PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1)); // 새로운 에필로그 헤더에 정보 삽입
+        bp = coalesce(bp);
+        place(bp, newSize);        
     }
 
     return (char *)bp;
@@ -176,21 +181,25 @@ void *mm_malloc(size_t size)
         return (char *)bp;
     }
 
-    // 반환된 주소가 NULL이면, 힙 확장 함수 호출
+    // 반환된 주소가 NULL이면, 힙 확장 함수 호출 / 요구하는 사이즈와 청크 사이즈(4kb) 중에 더 큰 값을 전달
     else
-    {              
-        bp = mm_extend(newSize);
+    {   
+        size_t extendSize;
+        extendSize = MAX(CHUNKSIZE, newSize);       
+        bp = mm_extend(extendSize, newSize);
         return (char *)bp;    
     }
 }     
 
 
-void coalesce(void *ptr)
+void *coalesce(void *ptr)
 {       
     size_t curSize = GETSIZE(HDRP(ptr)); 
     size_t nextSize = 0;
     size_t prevSize = 0;
 
+    void *bp = ptr;      
+    
     // 다음 블록이 가용 블록이면 다음 블록 사이즈 갱신
     if(GETALLOC(HDRP(NEXT_BLKP(ptr))) == 0)
         nextSize = GETSIZE(HDRP(NEXT_BLKP(ptr)));
@@ -199,28 +208,37 @@ void coalesce(void *ptr)
     if(GETALLOC(HDRP(PREV_BLKP(ptr))) == 0)
         prevSize = GETSIZE(HDRP(PREV_BLKP(ptr)));
 
+    // 경계 블록이 모두 할당 블록이면 현재 블록의 할당 비트만 갱신
+    if(GETALLOC(HDRP(PREV_BLKP(ptr))) && GETALLOC(HDRP(NEXT_BLKP(ptr))))
+    {
+        PUT(HDRP(ptr), PACK((GETSIZE(HDRP(ptr))), 0));
+        PUT(FTRP(ptr), PACK((GETSIZE(HDRP(ptr))), 0));   
+    }
+
     // 경계 블록이 모두 가용 블록이면 이전 블록의 헤더와 다음 블록의 푸터에 사이즈의 합과, 가용 정보를 삽입
     if(prevSize && nextSize)
     {
+        bp = PREV_BLKP(ptr);
         PUT(HDRP(PREV_BLKP(ptr)), PACK((prevSize + curSize + nextSize), 0));
-        PUT(FTRP(NEXT_BLKP(ptr)), PACK((prevSize + curSize + nextSize), 0));        
+        PUT(FTRP(NEXT_BLKP(ptr)), PACK((prevSize + curSize + nextSize), 0));                
     }      
 
     // 이전 블록이 가용 블록이면 이전 블록의 헤더와 현재 블록의 푸터에 사이즈의 합과, 가용 정보를 삽입
     else if(prevSize && !nextSize)
     {
+        bp = PREV_BLKP(ptr);
         PUT(HDRP(PREV_BLKP(ptr)), PACK((prevSize + curSize), 0));
         PUT(FTRP(ptr), PACK((prevSize + curSize), 0));        
     }
 
     // 다음 블록이 가용 블록이면 현재 블록의 헤더와 다음 블록의 푸터에 사이즈의 합과, 가용 정보를 삽입
     else if(nextSize && !prevSize)
-    {
+    {    
         PUT(HDRP(ptr), PACK((curSize + nextSize), 0));
         PUT(FTRP(ptr), PACK((curSize + nextSize), 0));        
     }
     
-    return;
+    return bp;
 }
 
 
@@ -230,10 +248,7 @@ void coalesce(void *ptr)
 void mm_free(void *ptr)
 {    
     if (ptr == NULL)
-        return;  
-        
-    PUT(HDRP(ptr), PACK((GETSIZE(HDRP(ptr))), 0));
-    PUT(FTRP(ptr), PACK((GETSIZE(HDRP(ptr))), 0));   
+        return;           
 
     coalesce(ptr);
     
